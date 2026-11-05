@@ -9,13 +9,14 @@ from scipy.stats import lognorm
 
 
 class BlackScholes:
-    def __init__(self, S0, K, T, r, sigma):
+    def __init__(self, S0, K, T, r, sigma, mu, num_steps=1000):
         self.S0 = S0  # Initial stock price
         self.K = K    # Strike price
         self.T = T    # Time to maturity (in years)
         self.r = r    # Risk-free interest rate
         self.sigma = sigma  # Volatility of the underlying asset
-        self.num_steps = 1000  # Number of time steps for simulation
+        self.num_steps = num_steps  # Number of time steps for simulation
+        self.mu= mu  # Drift of the underlying asset
 
     def simulate_stock_price(self):
         # We solve the following stochastic differential equation for the price of an asset in the Ito sense:
@@ -25,59 +26,72 @@ class BlackScholes:
         #Y_(t) = Y_(-1) + (r - 0.5 * sigma^2) * dt + sigma * sqrt(dt) * Z, where Z ~ N(0,1)
         #The price of the asset at time t is then given by S_t = exp(Y_t)
 
-        dt = self.T / self.num_steps
-        asset_prices = np.zeros(self.num_steps)
-        call_prices = np.zeros(self.num_steps)
-        put_prices = np.zeros(self.num_steps)
+        n = self.num_steps
+        dt = self.T / n
 
+        # Exact log-Euler scheme for GBM: n steps of size dt, so the last point is S_T
+        z = np.random.standard_normal(n)
+        increments = (self.mu - 0.5 * self.sigma ** 2) * dt + self.sigma * np.sqrt(dt) * z
+        asset_prices = np.empty(n + 1)
         asset_prices[0] = self.S0
-        call_prices[0] = self.call_price(asset_prices[0])
-        put_prices[0] = self.put_price(asset_prices[0])
+        asset_prices[1:] = self.S0 * np.exp(np.cumsum(increments))
 
-        for t in range(1, self.num_steps):
-            z = np.random.standard_normal() 
-            asset_prices[t] = asset_prices[t - 1] * np.exp((self.r - 0.5 * self.sigma ** 2) * dt + self.sigma * np.sqrt(dt) * z)
-            call_prices[t] = self.call_price(asset_prices[t])
-            put_prices[t] = self.put_price(asset_prices[t])
+        # Option values use the remaining time to maturity tau = T - t at each step.
+        # At t = T (tau = 0) the formula is undefined, so we use the payoff instead.
+        tau = self.T - dt * np.arange(n)
+        call_prices = np.empty(n + 1)
+        put_prices = np.empty(n + 1)
+        call_prices[:n] = self.call_price(asset_prices[:n], tau)
+        put_prices[:n] = self.put_price(asset_prices[:n], tau)
+        call_prices[n] = max(asset_prices[n] - self.K, 0)
+        put_prices[n] = max(self.K - asset_prices[n], 0)
 
         self.call_prices = call_prices
         self.put_prices = put_prices
         self.asset_prices = asset_prices   
 
-    def d1(self, S=None):
+    def d1(self, S=None, tau=None):
         if S is None:
             S = self.S0
-        return (np.log(S / self.K) + (self.r + 0.5 * self.sigma ** 2) * self.T) / (self.sigma * np.sqrt(self.T))
+        if tau is None:
+            tau = self.T  # time to maturity
+        return (np.log(S / self.K) + (self.r + 0.5 * self.sigma ** 2) * tau) / (self.sigma * np.sqrt(tau))
 
-    def d2(self, S=None):
-        if S is None:
-            S = self.S0
-        return self.d1(S) - self.sigma * np.sqrt(self.T)
+    def d2(self, S=None, tau=None):
+        if tau is None:
+            tau = self.T
+        return self.d1(S, tau) - self.sigma * np.sqrt(tau)
 
-    def call_price(self, S=None):
+    def call_price(self, S=None, tau=None):
         if S is None:
             S = self.S0
-        d1 = self.d1(S)
-        d2 = self.d2(S)
-        return (S * norm.cdf(d1) - self.K * np.exp(-self.r * self.T) * norm.cdf(d2))
+        if tau is None:
+            tau = self.T
+        d1 = self.d1(S, tau)
+        d2 = self.d2(S, tau)
+        return (S * norm.cdf(d1) - self.K * np.exp(-self.r * tau) * norm.cdf(d2))
 
-    def put_price(self, S=None):
+    def put_price(self, S=None, tau=None):
         if S is None:
             S = self.S0
-        d1 = self.d1(S)
-        d2 = self.d2(S)
-        return (self.K * np.exp(-self.r * self.T) * norm.cdf(-d2) - S * norm.cdf(-d1))
+        if tau is None:
+            tau = self.T
+        d1 = self.d1(S, tau)
+        d2 = self.d2(S, tau)
+        return (self.K * np.exp(-self.r * tau) * norm.cdf(-d2) - S * norm.cdf(-d1))
     
 class monteCarloOptionPricing(BlackScholes):
-    def __init__(self, S0, K, T, r, sigma):
-        super().__init__(S0, K, T, r, sigma)
-    
-    def monte_carlo_option_price(self, num_simulations=100):
-        call_prices = np.zeros((num_simulations, self.num_steps))
-        put_prices = np.zeros((num_simulations, self.num_steps))
-        asset_prices = np.zeros((num_simulations, self.num_steps))
-        for i in range(num_simulations):
-            print(f"Simulation {i + 1}/{num_simulations}")
+    # This class will simulate num_simulations of the stock price and option prices using the Black-Scholes model
+    def __init__(self, S0, K, T, r, sigma, mu, num_simulations=100, num_steps=1000):
+        super().__init__(S0, K, T, r, sigma, mu, num_steps)
+        self.num_simulations = num_simulations
+
+    def monte_carlo_option_price(self):
+        # Returns a tuple of (asset_prices, call_prices, put_prices) where each is a 2D array of shape (num_simulations, num_steps)
+        call_prices = np.zeros((self.num_simulations, self.num_steps + 1))
+        put_prices = np.zeros((self.num_simulations, self.num_steps + 1))
+        asset_prices = np.zeros((self.num_simulations, self.num_steps + 1))
+        for i in range(self.num_simulations):
             self.simulate_stock_price()
             call_prices[i] = self.call_prices
             put_prices[i] = self.put_prices
@@ -97,54 +111,24 @@ if __name__ == "__main__":
     T = 1     # Time to maturity (1 year)
     r = 0.05  # Risk-free interest rate (5%)
     sigma = 0.2  # Volatility (20%)
-    
-
-    s = np.linspace(0, 2*S0, 1000)
-    mu = np.log(S0) + (r - 0.5 * sigma ** 2) * T
+    mu = 2*r  # Drift is the same as the risk-free rate for risk-neutral pricing
+   
+    s = np.linspace(1e-6, 3*S0, 1000)
+    x0 = np.log(S0) + (mu - 0.5 * sigma ** 2) * T
     scale = sigma * np.sqrt(T)
-    expected_distribution = lognorm.pdf(s, s=scale, scale=np.exp(mu))
+    expected_distribution = lognorm.pdf(s, s=scale, scale=np.exp(x0))
 
-    bs = monteCarloOptionPricing(S0, K, T, r, sigma)
-    asset_prices, call_prices, put_prices = bs.monte_carlo_option_price(num_simulations=100)
-    # We make a histogram of the last column of the asset prices to see the distribution of the stock price at maturity
-    # this should be compatible with a lognormal distribution
-    #P(S_t = s) = (1/(s * sigma * sqrt(2 * pi * t))) * exp(-(ln(s/S0) - (r - 0.5 * sigma^2) * t)^2 / (2 * sigma^2 * t)))
+    bs = monteCarloOptionPricing(S0, K, T, r, sigma, mu, num_simulations=10000, num_steps=1000)
+    asset_prices, call_prices, put_prices = bs.monte_carlo_option_price()
+
 
     plt.figure(figsize=(12, 6))
-    plt.hist(call_prices[:, -1], bins=30, alpha=0.7, color='blue', label='Stock Price Distribution', density=True)
-    #plt.plot(s, expected_distribution, color='red', label='Expected Lognormal Distribution')
+    plt.hist(asset_prices[:, -1], bins=30, alpha=0.7, color='blue', label='Stock Price Distribution', density=True)
+    plt.plot(s, expected_distribution, color='red', label='Expected Lognormal Distribution')
     plt.title('Distribution of Stock Prices at Maturity')
     plt.xlabel('Stock Price')
     plt.ylabel('Frequency')
     plt.legend()
     plt.grid()
     plt.show()
-
-    '''
-    #we an histogram of the last price of the asset prices to see the distribution of the stock price at maturity
-    plt.figure(figsize=(12, 6))
-    plt.hist(bs.asset_prices[-100:], bins=30, alpha=0.7, color='blue', label='Stock Price Distribution')
-    plt.title('Distribution of Stock Prices at Maturity')
-    plt.xlabel('Stock Price')
-    plt.ylabel('Frequency')
-    plt.legend()
-    plt.grid()
-    plt.show()
-    #plt.plot(bs.asset_prices, label='Stock Price', color='blue')
-    plt.plot(bs.call_prices, label='Call Option Price', color='green')
-    plt.plot(bs.put_prices, label='Put Option Price', color='red')
-    # We plot the standard deviation as a shaded area around the mean price
-    plt.fill_between(range(len(bs.call_prices)), bs.call_prices - bs.std_call_prices, bs.call_prices + bs.std_call_prices, color='green', alpha=0.2)
-    #plt.fill_between(range(len(bs.put_prices)), bs.put_prices - bs.std_put_prices, bs.put_prices + bs.std_put_prices, color='red', alpha=0.2)
-    plt.title('Option Prices Over Time')
-    plt.xlabel('Time Steps')
-    plt.ylabel('Option Price')
-
-    plt.legend()
-    plt.show()
-
-    print(f"Call Option Price: {bs.call_price():.2f}")
-    print(f"Put Option Price: {bs.put_price():.2f}")
-
-    #bs.plot_stock_price(num_steps=1000)
-    '''
+  
