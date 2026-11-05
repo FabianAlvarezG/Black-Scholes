@@ -12,24 +12,34 @@ class BlackScholes:
     def __init__(self, S0, K, T, r, sigma, mu, num_steps=1000):
         self.S0 = S0  # Initial stock price
         self.K = K    # Strike price
-        self.T = T    # Time to maturity (in years)
+        self.T = T    # Time to maturity 
         self.r = r    # Risk-free interest rate
         self.sigma = sigma  # Volatility of the underlying asset
         self.num_steps = num_steps  # Number of time steps for simulation
         self.mu= mu  # Drift of the underlying asset
 
     def simulate_stock_price(self):
-        # We solve the following stochastic differential equation for the price of an asset in the Ito sense:
-        # dS = r * S * dt + sigma * S * dW
-        # We define Y = ln(S), then we have dY = (r - 0.5 * sigma^2) * dt + sigma * dW (Using Ito's lemma)
-        # We can simulate the process using the Euler-Maruyama method
-        #Y_(t) = Y_(-1) + (r - 0.5 * sigma^2) * dt + sigma * sqrt(dt) * Z, where Z ~ N(0,1)
-        #The price of the asset at time t is then given by S_t = exp(Y_t)
+        '''
+         We solve the following stochastic differential equation for the price of an asset in the Ito sense:
+        
+         dS = mu * S * dt + sigma * S * dW
 
+         By defining Y = ln(S), we use Ito's lemma to obtain
+
+         dY = (mu - 0.5 * sigma^2) * dt + sigma * dW 
+
+         We integrate in the Ito sense and get
+         
+         Y_(t+dt) = Y_t + (mu - 0.5 * sigma^2) * dt + sigma * sqrt(dt) * Z, where Z ~ N(0,1)
+
+        The price of the asset at time t is then given by S_t = exp(Y_t)
+    '''
+         
+        
         n = self.num_steps
         dt = self.T / n
 
-        # Exact log-Euler scheme for GBM: n steps of size dt, so the last point is S_T
+        
         z = np.random.standard_normal(n)
         increments = (self.mu - 0.5 * self.sigma ** 2) * dt + self.sigma * np.sqrt(dt) * z
         asset_prices = np.empty(n + 1)
@@ -87,7 +97,7 @@ class monteCarloOptionPricing(BlackScholes):
         self.num_simulations = num_simulations
 
     def monte_carlo_option_price(self):
-        # Returns a tuple of (asset_prices, call_prices, put_prices) where each is a 2D array of shape (num_simulations, num_steps)
+        # Returns a tuple of (asset_prices, call_prices, put_prices) where each is a 2D array of shape (num_simulations, num_steps + 1)
         call_prices = np.zeros((self.num_simulations, self.num_steps + 1))
         put_prices = np.zeros((self.num_simulations, self.num_steps + 1))
         asset_prices = np.zeros((self.num_simulations, self.num_steps + 1))
@@ -108,11 +118,11 @@ class monteCarloOptionPricing(BlackScholes):
 if __name__ == "__main__":
     S0 = 100  # Initial stock price
     K = 100   # Strike price
-    T = 1     # Time to maturity (1 year)
-    r = 0.05  # Risk-free interest rate (5%)
-    sigma = 0.2  # Volatility (20%)
-    mu = 2*r  # Drift is the same as the risk-free rate for risk-neutral pricing
-   
+    T = 1     # Time to maturity 
+    r = 0.05  # Risk-free interest rate 
+    sigma = 0.2  # Volatility 
+    mu = 2*r  # Real-world drift 
+
     s = np.linspace(1e-6, 3*S0, 1000)
     x0 = np.log(S0) + (mu - 0.5 * sigma ** 2) * T
     scale = sigma * np.sqrt(T)
@@ -123,11 +133,11 @@ if __name__ == "__main__":
 
 
     plt.figure(figsize=(12, 6))
-    plt.hist(asset_prices[:, -1], bins=30, alpha=0.7, color='blue', label='Stock Price Distribution', density=True)
-    plt.plot(s, expected_distribution, color='red', label='Expected Lognormal Distribution')
+    plt.hist(asset_prices[:, -1], bins=30, alpha=0.7, color='blue', label='Simulated stock prices', density=True)
+    plt.plot(s, expected_distribution, color='red', label='Analytical log-normal distribution')
     plt.title('Distribution of Stock Prices at Maturity')
     plt.xlabel('Stock Price')
-    plt.ylabel('Frequency')
+    plt.ylabel('Density')
     plt.legend()
     plt.grid()
     plt.show()
